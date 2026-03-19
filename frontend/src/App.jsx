@@ -178,17 +178,20 @@ const GLOBAL_CSS = `
   }
 `
 
+const INITIAL_PROFILE = { name: '', email: '', phone: '', state: '', county: '', zipCode: '' }
+
 export default function App() {
   const [message, setMessage] = useState('')
-  const [messages, setMessages] = useState([
-    { role: 'assistant', text: "Hi! I'm Braelo. Ask me about living in the USA or finding local businesses.", timestamp: formatTime() },
-  ])
+  const [messages, setMessages] = useState([])
   const [loading, setLoading] = useState(false)
-  const [theme, setTheme] = useState(() => {
-    if (typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches) return 'dark'
-    return 'light'
-  })
+  const [theme, setTheme] = useState('light')
   const [inputFocused, setInputFocused] = useState(false)
+  const [userProfile, setUserProfile] = useState(INITIAL_PROFILE)
+  const [onboardingDone, setOnboardingDone] = useState(false)
+  const [showContactModal, setShowContactModal] = useState(false)
+  const [contactModalMessage, setContactModalMessage] = useState('')
+  const [contactEmail, setContactEmail] = useState('')
+  const [contactPhone, setContactPhone] = useState('')
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
@@ -209,6 +212,16 @@ export default function App() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, loading])
 
+  const buildChatPayload = (text) => ({
+    message: text,
+    name: userProfile.name || undefined,
+    email: userProfile.email || undefined,
+    phone: userProfile.phone || undefined,
+    state: userProfile.state || undefined,
+    county: userProfile.county || undefined,
+    zip_code: userProfile.zipCode || undefined,
+  })
+
   const sendMessage = async (e) => {
     e?.preventDefault()
     const text = message.trim()
@@ -221,16 +234,55 @@ export default function App() {
       const res = await fetch(`${API_BASE}/chatbot/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify(buildChatPayload(text)),
       })
       const data = await res.json().catch(() => ({}))
       const reply = data.response ?? data.error ?? 'Sorry, something went wrong.'
       setMessages((prev) => [...prev, { role: 'assistant', text: reply, timestamp: formatTime() }])
+      if (data.require_contact_details) {
+        setContactModalMessage(data.contact_details_message || 'Please add your details so we can continue.')
+        setContactEmail(userProfile.email || '')
+        setContactPhone(userProfile.phone || '')
+        setShowContactModal(true)
+      }
     } catch {
       setMessages((prev) => [...prev, { role: 'assistant', text: 'Network error. Is the Braelo backend running?', timestamp: formatTime() }])
     } finally {
       setLoading(false)
     }
+  }
+
+  const submitContactDetails = async () => {
+    const email = (contactEmail || '').trim()
+    const phone = (contactPhone || '').trim()
+    if (!email || !phone) return
+    setUserProfile((p) => ({ ...p, email, phone }))
+    setShowContactModal(false)
+    try {
+      await fetch(`${API_BASE}/chatbot/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...buildChatPayload('Contact details updated.'),
+          email,
+          phone,
+        }),
+      })
+    } catch (_) {}
+  }
+
+  const handleOnboardingSubmit = (e) => {
+    e?.preventDefault()
+    const name = (userProfile.name || '').trim()
+    const state = (userProfile.state || '').trim()
+    const county = (userProfile.county || '').trim()
+    const zipCode = (userProfile.zipCode || '').trim()
+    if (!name || !state || !county || !zipCode) return
+    setOnboardingDone(true)
+    const greeting = `Hi ${name}! I have your location. What would you like to know about living in the USA or finding local businesses in your area?`
+    setMessages([
+      { role: 'assistant', text: greeting, timestamp: formatTime() },
+    ])
   }
 
   const handleKey = (e) => {
@@ -239,6 +291,136 @@ export default function App() {
 
   const canSend = message.trim() && !loading
 
+  if (!onboardingDone) {
+    return (
+      <div data-theme={theme} style={{
+        width: '100%', maxWidth: 500, height: '99vh', maxHeight: 760, minHeight: 500,
+        background: 'var(--window-bg)', borderRadius: 26, boxShadow: 'var(--window-shadow)',
+        display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative',
+      }}>
+        <div style={{ position: 'absolute', inset: 0, backgroundImage: 'radial-gradient(circle, var(--dot-color) 1.5px, transparent 1.5px)', backgroundSize: '24px 24px', pointerEvents: 'none' }} />
+        <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 22px', borderBottom: '1px solid var(--header-border)', background: 'var(--header-bg)', position: 'relative', zIndex: 2 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <BraeloLogo />
+            <div>
+              <div style={{ fontFamily: "'Syne', sans-serif", fontSize: 17, fontWeight: 700, color: 'var(--title-color)' }}>Braelo</div>
+              <div style={{ fontSize: 11.5, color: 'var(--subtitle-color)' }}>Your USA local guide</div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={toggleTheme}
+            aria-label={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px', borderRadius: 20,
+              border: '1px solid var(--toggle-border)', background: 'var(--toggle-bg)', color: 'var(--toggle-color)',
+              fontSize: 13, fontWeight: 500, cursor: 'pointer', fontFamily: "'DM Sans', sans-serif",
+              transition: 'background 0.2s, border-color 0.2s',
+            }}
+            onMouseOver={(e) => { e.currentTarget.style.background = 'var(--toggle-hover-bg)' }}
+            onMouseOut={(e) => { e.currentTarget.style.background = 'var(--toggle-bg)' }}
+          >
+            {theme === 'light' ? <MoonIcon /> : <SunIcon />}
+            <span>{theme === 'light' ? 'Dark' : 'Light'}</span>
+          </button>
+        </header>
+        <div style={{ flex: 1, overflowY: 'auto', padding: 24, position: 'relative', zIndex: 1 }}>
+          <p style={{ fontSize: 15, color: 'var(--incoming-text)', marginBottom: 20, lineHeight: 1.5 }}>
+            To give you precise, location-based answers, please share your name and location.
+          </p>
+          <form onSubmit={handleOnboardingSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <label style={{ fontSize: 13, fontWeight: 500, color: 'var(--subtitle-color)' }}>Name *</label>
+            <input
+              type="text"
+              value={userProfile.name}
+              onChange={(e) => setUserProfile((p) => ({ ...p, name: e.target.value }))}
+              placeholder="Your name"
+              required
+              style={{
+                padding: '12px 14px', borderRadius: 12, border: '1.5px solid var(--input-border)',
+                background: 'var(--input-bg)', color: 'var(--input-text)', fontSize: 14,
+                fontFamily: "'DM Sans', sans-serif",
+              }}
+            />
+            <label style={{ fontSize: 13, fontWeight: 500, color: 'var(--subtitle-color)' }}>Email (optional)</label>
+            <input
+              type="email"
+              value={userProfile.email}
+              onChange={(e) => setUserProfile((p) => ({ ...p, email: e.target.value }))}
+              placeholder="email@example.com"
+              style={{
+                padding: '12px 14px', borderRadius: 12, border: '1.5px solid var(--input-border)',
+                background: 'var(--input-bg)', color: 'var(--input-text)', fontSize: 14,
+                fontFamily: "'DM Sans', sans-serif",
+              }}
+            />
+            <label style={{ fontSize: 13, fontWeight: 500, color: 'var(--subtitle-color)' }}>Phone (optional)</label>
+            <input
+              type="tel"
+              value={userProfile.phone}
+              onChange={(e) => setUserProfile((p) => ({ ...p, phone: e.target.value }))}
+              placeholder="+1 234 567 8900"
+              style={{
+                padding: '12px 14px', borderRadius: 12, border: '1.5px solid var(--input-border)',
+                background: 'var(--input-bg)', color: 'var(--input-text)', fontSize: 14,
+                fontFamily: "'DM Sans', sans-serif",
+              }}
+            />
+            <label style={{ fontSize: 13, fontWeight: 500, color: 'var(--subtitle-color)' }}>State *</label>
+            <input
+              type="text"
+              value={userProfile.state}
+              onChange={(e) => setUserProfile((p) => ({ ...p, state: e.target.value }))}
+              placeholder="e.g. California"
+              required
+              style={{
+                padding: '12px 14px', borderRadius: 12, border: '1.5px solid var(--input-border)',
+                background: 'var(--input-bg)', color: 'var(--input-text)', fontSize: 14,
+                fontFamily: "'DM Sans', sans-serif",
+              }}
+            />
+            <label style={{ fontSize: 13, fontWeight: 500, color: 'var(--subtitle-color)' }}>County *</label>
+            <input
+              type="text"
+              value={userProfile.county}
+              onChange={(e) => setUserProfile((p) => ({ ...p, county: e.target.value }))}
+              placeholder="e.g. Los Angeles"
+              required
+              style={{
+                padding: '12px 14px', borderRadius: 12, border: '1.5px solid var(--input-border)',
+                background: 'var(--input-bg)', color: 'var(--input-text)', fontSize: 14,
+                fontFamily: "'DM Sans', sans-serif",
+              }}
+            />
+            <label style={{ fontSize: 13, fontWeight: 500, color: 'var(--subtitle-color)' }}>ZIP code *</label>
+            <input
+              type="text"
+              value={userProfile.zipCode}
+              onChange={(e) => setUserProfile((p) => ({ ...p, zipCode: e.target.value }))}
+              placeholder="e.g. 90210"
+              required
+              style={{
+                padding: '12px 14px', borderRadius: 12, border: '1.5px solid var(--input-border)',
+                background: 'var(--input-bg)', color: 'var(--input-text)', fontSize: 14,
+                fontFamily: "'DM Sans', sans-serif",
+              }}
+            />
+            <button
+              type="submit"
+              style={{
+                marginTop: 8, padding: '14px 20px', borderRadius: 50, border: 'none',
+                background: 'var(--send-bg)', color: '#fff', fontSize: 15, fontWeight: 600,
+                fontFamily: "'DM Sans', sans-serif", cursor: 'pointer',
+              }}
+            >
+              Continue
+            </button>
+          </form>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div data-theme={theme} style={{
       width: '100%', maxWidth: 500, height: '99vh', maxHeight: 760, minHeight: 500,
@@ -246,6 +428,75 @@ export default function App() {
       display: 'flex', flexDirection: 'column', overflow: 'hidden',
       transition: 'background 0.4s ease, box-shadow 0.4s ease', position: 'relative',
     }}>
+
+      {/* Contact details modal */}
+      {showContactModal && (
+        <div style={{
+          position: 'absolute', inset: 0, zIndex: 10, background: 'rgba(0,0,0,0.5)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+        }} onClick={() => setShowContactModal(false)}>
+          <div style={{
+            background: 'var(--window-bg)', borderRadius: 20, padding: 24, maxWidth: 360, width: '100%',
+            boxShadow: 'var(--window-shadow)', border: '1px solid var(--header-border)',
+          }} onClick={(e) => e.stopPropagation()}>
+            <p style={{ fontSize: 15, color: 'var(--incoming-text)', marginBottom: 16, lineHeight: 1.5 }}>
+              {contactModalMessage}
+            </p>
+            <label style={{ fontSize: 13, fontWeight: 500, color: 'var(--subtitle-color)', display: 'block', marginBottom: 6 }}>Email *</label>
+            <input
+              type="email"
+              value={contactEmail}
+              onChange={(e) => setContactEmail(e.target.value)}
+              placeholder="email@example.com"
+              style={{
+                width: '100%', padding: '12px 14px', marginBottom: 12, borderRadius: 12,
+                border: '1.5px solid var(--input-border)', background: 'var(--input-bg)',
+                color: 'var(--input-text)', fontSize: 14, fontFamily: "'DM Sans', sans-serif",
+                boxSizing: 'border-box',
+              }}
+            />
+            <label style={{ fontSize: 13, fontWeight: 500, color: 'var(--subtitle-color)', display: 'block', marginBottom: 6 }}>Phone *</label>
+            <input
+              type="tel"
+              value={contactPhone}
+              onChange={(e) => setContactPhone(e.target.value)}
+              placeholder="+1 234 567 8900"
+              style={{
+                width: '100%', padding: '12px 14px', marginBottom: 20, borderRadius: 12,
+                border: '1.5px solid var(--input-border)', background: 'var(--input-bg)',
+                color: 'var(--input-text)', fontSize: 14, fontFamily: "'DM Sans', sans-serif",
+                boxSizing: 'border-box',
+              }}
+            />
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => setShowContactModal(false)}
+                style={{
+                  padding: '10px 18px', borderRadius: 50, border: '1px solid var(--input-border)',
+                  background: 'var(--input-bg)', color: 'var(--incoming-text)', fontSize: 14,
+                  fontFamily: "'DM Sans', sans-serif", cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={submitContactDetails}
+                disabled={!contactEmail.trim() || !contactPhone.trim()}
+                style={{
+                  padding: '10px 20px', borderRadius: 50, border: 'none',
+                  background: (contactEmail.trim() && contactPhone.trim()) ? 'var(--send-bg)' : 'var(--send-disabled)',
+                  color: '#fff', fontSize: 14, fontWeight: 600, fontFamily: "'DM Sans', sans-serif",
+                  cursor: (contactEmail.trim() && contactPhone.trim()) ? 'pointer' : 'not-allowed',
+                }}
+              >
+                Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Dot-grid texture */}
       <div style={{
