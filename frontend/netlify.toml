@@ -1,0 +1,25 @@
+# Netlify: always build Vite and publish dist/ (not repo root).
+# Wrong MIME / module errors usually mean either:
+# - Publish directory is not "dist", or build never ran (browser loads /src/main.jsx).
+# - Or a catch-all redirect serves HTML for .js URLs (fix order / exclusions).
+
+[build]
+  command = "npm ci && npm run build"
+  publish = "dist"
+
+# SPA: serve index.html for client routing; static files in dist/ are still matched first.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# Vite emits hashed JS under /assets/*.js — correct MIME if host defaults to octet-stream.
+[[headers]]
+  for = "/assets/*.js"
+  [headers.values]
+    Content-Type = "text/javascript; charset=utf-8"
+
+[[headers]]
+  for = "/assets/*.mjs"
+  [headers.values]
+    Content-Type = "text/javascript; charset=utf-8"
