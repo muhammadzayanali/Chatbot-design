@@ -469,7 +469,8 @@ function ContactModal({ message, email, phone, onEmail, onPhone, onSubmit, onClo
   )
 }
 
-// ─── Onboarding View ──────────────────────────────────────────────────────────
+// ─── Onboarding View (disabled for now — uncomment block to restore pre-chat form) ───
+/*
 const US_STATES = [
   'Alabama','Alaska','Arizona','Arkansas','California','Colorado','Connecticut',
   'Delaware','Florida','Georgia','Hawaii','Idaho','Illinois','Indiana','Iowa',
@@ -588,6 +589,7 @@ function OnboardingView({ theme, onToggleTheme, onComplete }) {
     </div>
   )
 }
+*/
 
 // ─── Quick replies ────────────────────────────────────────────────────────────
 const QUICK_REPLIES = [
@@ -607,13 +609,19 @@ export default function App() {
   const [theme,              setTheme]              = useState(readStoredTheme)
   const [inputFocused,       setInputFocused]       = useState(false)
   const [userProfile,        setUserProfile]        = useState(INITIAL_PROFILE)
-  const [onboardingDone,     setOnboardingDone]     = useState(false)
   const [showContactModal,   setShowContactModal]   = useState(false)
   const [contactModalMsg,    setContactModalMsg]    = useState('')
   const [contactEmail,       setContactEmail]       = useState('')
   const [contactPhone,       setContactPhone]       = useState('')
   const [showScrollBtn,      setShowScrollBtn]      = useState(false)
   const [copiedId,           setCopiedId]           = useState(null)
+  /** Browser GPS for backend reverse-geocode (city/state when user does not type a place). */
+  const [deviceGeo, setDeviceGeo] = useState({
+    latitude: null,
+    longitude: null,
+    status: 'pending', // pending | ok | denied | unsupported
+  })
+  const [locationContext, setLocationContext] = useState(null)
 
   const messagesEndRef   = useRef(null)
   const messagesAreaRef  = useRef(null)
@@ -629,6 +637,24 @@ export default function App() {
       localStorage.setItem(THEME_STORAGE_KEY, theme)
     } catch (_) { /* private mode */ }
   }, [theme])
+
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      setDeviceGeo({ latitude: null, longitude: null, status: 'unsupported' })
+      return
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setDeviceGeo({
+          latitude: pos.coords.latitude,
+          longitude: pos.coords.longitude,
+          status: 'ok',
+        })
+      },
+      () => setDeviceGeo({ latitude: null, longitude: null, status: 'denied' }),
+      { enableHighAccuracy: false, maximumAge: 300000, timeout: 12000 },
+    )
+  }, [])
 
   useEffect(() => {
     const el = messagesAreaRef.current
@@ -655,15 +681,25 @@ export default function App() {
     el.style.height = Math.min(el.scrollHeight, 120) + 'px'
   }
 
-  const buildPayload = (text) => ({
-    message: text,
-    name:     userProfile.name     || undefined,
-    email:    userProfile.email    || undefined,
-    phone:    userProfile.phone    || undefined,
-    state:    userProfile.state    || undefined,
-    county:   userProfile.county   || undefined,
-    zip_code: userProfile.zipCode  || undefined,
-  })
+  const buildPayload = (text) => {
+    const p = {
+      message: text,
+      name:     userProfile.name     || undefined,
+      email:    userProfile.email    || undefined,
+      phone:    userProfile.phone    || undefined,
+      state:    userProfile.state    || undefined,
+      county:   userProfile.county   || undefined,
+      zip_code: userProfile.zipCode  || undefined,
+    }
+    if (deviceGeo.status === 'ok' && deviceGeo.latitude != null && deviceGeo.longitude != null) {
+      p.latitude = deviceGeo.latitude
+      p.longitude = deviceGeo.longitude
+      p.location_enabled = true
+    } else if (deviceGeo.status === 'denied') {
+      p.location_enabled = false
+    }
+    return p
+  }
 
   const sendMessage = async (e) => {
     e?.preventDefault()
@@ -682,6 +718,11 @@ export default function App() {
       })
       const data  = await res.json().catch(() => ({}))
       const reply = data.response ?? data.error ?? 'Sorry, something went wrong.'
+      const lc = data.location_context
+      if (lc && (lc.city || lc.state)) {
+        const parts = [lc.city, lc.state].filter(Boolean)
+        setLocationContext({ label: parts.join(', '), fromGps: !!lc.from_device_gps })
+      }
       setMessages((p) => [...p, { id: Date.now()+1, role: 'assistant', text: reply, timestamp: fmt() }])
       if (data.require_contact_details) {
         setContactModalMsg(data.contact_details_message || 'Please share your contact details to continue.')
@@ -711,6 +752,7 @@ export default function App() {
     } catch (_) {}
   }
 
+  /* Pre-chat onboarding (restore with US_STATES / OnboardingView block below):
   const handleOnboardingComplete = (form) => {
     setUserProfile(form)
     setOnboardingDone(true)
@@ -723,6 +765,7 @@ export default function App() {
       `What would you like to explore today?`
     setMessages([{ id: Date.now(), role: 'assistant', text: greeting, timestamp: fmt() }])
   }
+  */
 
   const copyMessage = async (id, text) => {
     try { await navigator.clipboard.writeText(text); setCopiedId(id); setTimeout(() => setCopiedId(null), 1800) }
@@ -740,8 +783,8 @@ export default function App() {
     else last.msgs.push(m)
   })
 
-  // ─── Chat widget (rendered inside chat section) ───
-  const ChatWidget = onboardingDone ? (
+  // ─── Chat widget (rendered inside chat section) — pre-chat form temporarily disabled ───
+  const ChatWidget = (
     <div className="app-window" data-theme={theme}>
       <div className="dot-pattern" />
 
@@ -838,11 +881,16 @@ export default function App() {
             <IconSend />
           </button>
         </div>
+        {locationContext?.label && (
+          <p className="input-hint geo-context-hint" style={{ marginBottom: 4 }}>
+            {locationContext.fromGps
+              ? <>Using your area: <strong>{locationContext.label}</strong> (from device location)</>
+              : <>Personalized for: <strong>{locationContext.label}</strong></>}
+          </p>
+        )}
         <p className="input-hint">Braelo may make mistakes. Verify important information.</p>
       </div>
     </div>
-  ) : (
-    <OnboardingView theme={theme} onToggleTheme={toggleTheme} onComplete={handleOnboardingComplete} />
   )
 
   return (
