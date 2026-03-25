@@ -3,7 +3,8 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 // ─── Asset imports (processed by Vite's build pipeline) ──────────────────────
-import imgBraeloLogo from '../Public/BraeloLogo.png'
+import lightLogo from '../Public/logo_black.svg'
+import darkLogo  from '../Public/logo_white.svg'
 import imgChatBot    from '../Public/ChatBot.svg'
 import imgBot1       from './assets/bot1.png'
 import imgBot2       from './assets/bot2.png'
@@ -70,9 +71,7 @@ function SiteHeader({ theme, onToggleTheme, onTryNow }) {
       <div className="site-container">
         <div className="site-header-inner">
           <a className="site-logo" href="#" onClick={(e) => e.preventDefault()}>
-            <Img src={imgBraeloLogo} alt="Braelo" className="site-logo-img"
-              fallback={<div className="site-logo-fallback">B</div>} />
-            <span className="site-logo-name">Brae<span>lo</span></span>
+            <Img src={ theme === 'light' ? lightLogo : darkLogo} alt="Braelo" className="site-logo-img"/>
           </a>
 
           <nav className="site-nav">
@@ -278,7 +277,7 @@ function SiteFooter({ onTryNow }) {
           {/* Brand */}
           <div className="footer-brand">
             <div className="footer-logo">
-              <Img src={imgBraeloLogo} alt="Braelo" className="footer-logo-img"
+              <Img src={darkLogo} alt="Braelo" className="footer-logo-img"
                 fallback={<div className="site-logo-fallback" style={{ width:32,height:32,fontSize:12 }}>B</div>} />
               <span className="footer-logo-name">Brae<span>lo</span></span>
             </div>
@@ -370,7 +369,7 @@ function AlwaysOnSection({ onTryNow }) {
 
             <h2 className="always-on-title">
               While you sleep,<br />
-              <span>Braelo</span> never does.
+              <span style={{ color: '#FFC300' }}>Braelo</span> never does.
             </h2>
 
             <p className="always-on-sub">
@@ -379,15 +378,15 @@ function AlwaysOnSection({ onTryNow }) {
 
             <div className="always-on-stats">
               <div className="always-on-stat">
-                <span className="always-on-stat-num">99.9%</span>
+                <span style={{ color: '#FFC300' }} className="always-on-stat-num">99.9%</span>
                 <span className="always-on-stat-label">Uptime guaranteed</span>
               </div>
               <div className="always-on-stat">
-                <span className="always-on-stat-num">&lt; 2s</span>
+                <span style={{ color: '#FFC300' }} className="always-on-stat-num">&lt; 2s</span>
                 <span className="always-on-stat-label">Average response</span>
               </div>
               <div className="always-on-stat">
-                <span className="always-on-stat-num">24/7</span>
+                <span style={{ color: '#FFC300' }} className="always-on-stat-num">24/7</span>
                 <span className="always-on-stat-label">Always available</span>
               </div>
             </div>
@@ -512,7 +511,7 @@ function OnboardingView({ theme, onToggleTheme, onComplete }) {
       <header className="app-header">
         <div className="header-left">
           <div className="logo-wrap" style={{ width:36,height:36 }}>
-            <Img src={imgBraeloLogo} alt="Braelo" className="logo-img" style={{ width:36,height:36 }}
+            <Img src={theme === 'light' ? lightLogo : darkLogo} alt="Braelo" className="logo-img" style={{ width:36,height:36 }}
               fallback={<div className="logo-fallback" style={{ width:36,height:36,fontSize:14 }}>B</div>} />
           </div>
           <div>
@@ -760,7 +759,7 @@ export default function App() {
       <header className="app-header">
         <div className="header-left">
           <div className="logo-wrap">
-            <Img src={imgBraeloLogo} alt="Braelo" className="logo-img"
+            <Img src={theme === 'light' ? lightLogo : darkLogo} alt="Braelo" className="logo-img"
               fallback={<div className="logo-fallback">B</div>} />
             <span className="status-dot" aria-hidden="true" />
           </div>
