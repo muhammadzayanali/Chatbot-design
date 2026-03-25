@@ -278,8 +278,7 @@ function SiteFooter({ onTryNow }) {
           <div className="footer-brand">
             <div className="footer-logo">
               <Img src={darkLogo} alt="Braelo" className="footer-logo-img"
-                fallback={<div className="site-logo-fallback" style={{ width:32,height:32,fontSize:12 }}>B</div>} />
-              <span className="footer-logo-name">Brae<span>lo</span></span>
+                fallback={<div className="site-logo-fallback" style={{ width:100,height:32,fontSize:12 }}>B</div>} />
             </div>
             <p className="footer-desc">Your AI-powered USA local guide — helping you discover businesses, services, and community resources right where you live.</p>
             <div className="footer-social">
@@ -510,13 +509,9 @@ function OnboardingView({ theme, onToggleTheme, onComplete }) {
       <div className="dot-pattern" />
       <header className="app-header">
         <div className="header-left">
-          <div className="logo-wrap" style={{ width:36,height:36 }}>
-            <Img src={theme === 'light' ? lightLogo : darkLogo} alt="Braelo" className="logo-img" style={{ width:36,height:36 }}
+          <div className="logo-wrap" style={{ width:100,height:36 }}>
+            <Img src={theme === 'light' ? lightLogo : darkLogo} alt="Braelo" className="logo-img" style={{ width:100,height:36 }}
               fallback={<div className="logo-fallback" style={{ width:36,height:36,fontSize:14 }}>B</div>} />
-          </div>
-          <div>
-            <div className="header-title">Braelo</div>
-            <div className="header-sub">Your USA local guide</div>
           </div>
         </div>
         <button className="theme-btn" onClick={onToggleTheme} aria-label="Toggle theme">
