@@ -758,10 +758,6 @@ export default function App() {
               fallback={<div className="logo-fallback">B</div>} />
             <span className="status-dot" aria-hidden="true" />
           </div>
-          <div>
-            <div className="header-title">Braelo</div>
-            <div className="header-sub">Your USA local guide · <span className="online-text">Online</span></div>
-          </div>
         </div>
         <button className="theme-btn" onClick={toggleTheme} aria-label="Toggle theme">
           {theme==='light' ? <IconMoon /> : <IconSun />}
