@@ -615,6 +615,16 @@ export default function App() {
   const [contactPhone,       setContactPhone]       = useState('')
   const [showScrollBtn,      setShowScrollBtn]      = useState(false)
   const [copiedId,           setCopiedId]           = useState(null)
+  /**
+   * A new UUID is created every time the component mounts (i.e. every page load / refresh).
+   * This lets the backend treat each browser session as a fresh conversation for language detection,
+   * while still using the stable client IP for location/profile persistence.
+   */
+  const [sessionId] = useState(() =>
+    (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  )
   /** Browser GPS for backend reverse-geocode (city/state when user does not type a place). */
   const [deviceGeo, setDeviceGeo] = useState({
     latitude: null,
@@ -683,13 +693,14 @@ export default function App() {
 
   const buildPayload = (text) => {
     const p = {
-      message: text,
-      name:     userProfile.name     || undefined,
-      email:    userProfile.email    || undefined,
-      phone:    userProfile.phone    || undefined,
-      state:    userProfile.state    || undefined,
-      county:   userProfile.county   || undefined,
-      zip_code: userProfile.zipCode  || undefined,
+      message:    text,
+      session_id: sessionId,
+      name:       userProfile.name     || undefined,
+      email:      userProfile.email    || undefined,
+      phone:      userProfile.phone    || undefined,
+      state:      userProfile.state    || undefined,
+      county:     userProfile.county   || undefined,
+      zip_code:   userProfile.zipCode  || undefined,
     }
     if (deviceGeo.status === 'ok' && deviceGeo.latitude != null && deviceGeo.longitude != null) {
       p.latitude = deviceGeo.latitude
