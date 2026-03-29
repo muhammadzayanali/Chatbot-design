@@ -19,8 +19,8 @@ import imgGirl4      from './assets/girl4.png'
 import imgMen1       from './assets/men1.png'
 import imgSleepyMen  from './assets/sleepy_men.png'
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'https://braelo-v1-bdaqhdc4c7d9fdb7.canadacentral-01.azurewebsites.net'
-
+const API_BASE = 'https://braelo-v1-bdaqhdc4c7d9fdb7.canadacentral-01.azurewebsites.net'
+// const API_BASE = import.meta.env.VITE_API_BASE
 const THEME_STORAGE_KEY = 'braelo-theme'
 /** Default theme when nothing is saved (must match index.html inline script DEFAULT_THEME). */
 const DEFAULT_THEME = 'dark'
@@ -892,13 +892,6 @@ export default function App() {
             <IconSend />
           </button>
         </div>
-        {locationContext?.label && (
-          <p className="input-hint geo-context-hint" style={{ marginBottom: 4 }}>
-            {locationContext.fromGps
-              ? <>Using your area: <strong>{locationContext.label}</strong> (from device location)</>
-              : <>Personalized for: <strong>{locationContext.label}</strong></>}
-          </p>
-        )}
         <p className="input-hint">Braelo may make mistakes. Verify important information.</p>
       </div>
     </div>
