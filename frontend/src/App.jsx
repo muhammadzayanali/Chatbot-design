@@ -20,7 +20,7 @@ import imgMen1       from './assets/men1.png'
 import imgSleepyMen  from './assets/sleepy_men.png'
 
 const API_BASE = 'https://braelo-v1-bdaqhdc4c7d9fdb7.canadacentral-01.azurewebsites.net'
-// const API_BASE = import.meta.env.VITE_API_BASE
+// const API_BASE = "http://127.0.0.1:5000"
 const THEME_STORAGE_KEY = 'braelo-theme'
 /** Default theme when nothing is saved (must match index.html inline script DEFAULT_THEME). */
 const DEFAULT_THEME = 'dark'
@@ -36,6 +36,59 @@ function readStoredTheme() {
 
 function fmt(date = new Date()) {
   return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+}
+
+const GPS_STORAGE_KEY = 'braelo_last_gps'
+const GPS_STORAGE_MAX_AGE_MS = 48 * 60 * 60 * 1000
+
+function readStoredGps() {
+  try {
+    const raw = sessionStorage.getItem(GPS_STORAGE_KEY)
+    if (!raw) return null
+    const o = JSON.parse(raw)
+    if (o == null || typeof o.lat !== 'number' || typeof o.lng !== 'number') return null
+    if (Date.now() - (o.t || 0) > GPS_STORAGE_MAX_AGE_MS) return null
+    return { latitude: o.lat, longitude: o.lng }
+  } catch (_) {
+    return null
+  }
+}
+
+function writeStoredGps(latitude, longitude) {
+  try {
+    sessionStorage.setItem(
+      GPS_STORAGE_KEY,
+      JSON.stringify({ lat: latitude, lng: longitude, t: Date.now() }),
+    )
+  } catch (_) { /* quota / private mode */ }
+}
+
+function clearStoredGps() {
+  try {
+    sessionStorage.removeItem(GPS_STORAGE_KEY)
+  } catch (_) {}
+}
+
+/** One-shot browser position for this request (handles race: user sends before mount geo finishes). */
+function getCurrentPositionOnce(timeoutMs = 10000) {
+  return new Promise((resolve) => {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      resolve(null)
+      return
+    }
+    const timer = setTimeout(() => resolve(null), timeoutMs)
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        clearTimeout(timer)
+        resolve({ latitude: pos.coords.latitude, longitude: pos.coords.longitude })
+      },
+      () => {
+        clearTimeout(timer)
+        resolve(null)
+      },
+      { enableHighAccuracy: false, maximumAge: 60000, timeout: timeoutMs },
+    )
+  })
 }
 
 // ─── Global styles live in global-app.css (imported in main.jsx — no inject delay / FOUC) ───
@@ -599,6 +652,21 @@ const QUICK_REPLIES = [
   'Best restaurants in my area',
 ]
 
+/** Google Maps, Google search, etc. — open in a new tab; keep relative/hash links default. */
+const CHAT_MARKDOWN_COMPONENTS = {
+  a: (props) => {
+    const href = props.href || ''
+    const external = /^https?:\/\//i.test(href)
+    return (
+      <a
+        {...props}
+        target={external ? '_blank' : undefined}
+        rel={external ? 'noopener noreferrer' : undefined}
+      />
+    )
+  },
+}
+
 // ─── Main App ─────────────────────────────────────────────────────────────────
 const INITIAL_PROFILE = { name:'', email:'', phone:'', state:'', county:'', zipCode:'' }
 
@@ -626,10 +694,16 @@ export default function App() {
       : `${Date.now()}-${Math.random().toString(36).slice(2)}`
   )
   /** Browser GPS for backend reverse-geocode (city/state when user does not type a place). */
-  const [deviceGeo, setDeviceGeo] = useState({
-    latitude: null,
-    longitude: null,
-    status: 'pending', // pending | ok | denied | unsupported
+  const [deviceGeo, setDeviceGeo] = useState(() => {
+    const cached = readStoredGps()
+    if (cached) {
+      return { latitude: cached.latitude, longitude: cached.longitude, status: 'ok' }
+    }
+    return {
+      latitude: null,
+      longitude: null,
+      status: 'pending', // pending | ok | denied | unsupported
+    }
   })
   const [locationContext, setLocationContext] = useState(null)
 
@@ -655,14 +729,20 @@ export default function App() {
     }
     navigator.geolocation.getCurrentPosition(
       (pos) => {
+        const lat = pos.coords.latitude
+        const lng = pos.coords.longitude
+        writeStoredGps(lat, lng)
         setDeviceGeo({
-          latitude: pos.coords.latitude,
-          longitude: pos.coords.longitude,
+          latitude: lat,
+          longitude: lng,
           status: 'ok',
         })
       },
-      () => setDeviceGeo({ latitude: null, longitude: null, status: 'denied' }),
-      { enableHighAccuracy: false, maximumAge: 300000, timeout: 12000 },
+      () => {
+        clearStoredGps()
+        setDeviceGeo({ latitude: null, longitude: null, status: 'denied' })
+      },
+      { enableHighAccuracy: false, maximumAge: 300000, timeout: 8000 },
     )
   }, [])
 
@@ -691,7 +771,10 @@ export default function App() {
     el.style.height = Math.min(el.scrollHeight, 120) + 'px'
   }
 
-  const buildPayload = (text) => {
+  /**
+   * @param {{ latitude?: number, longitude?: number } | null} coordsOverride — from await getCurrentPositionOnce when state was still pending
+   */
+  const buildPayload = (text, coordsOverride = null) => {
     const p = {
       message:    text,
       session_id: sessionId,
@@ -702,9 +785,19 @@ export default function App() {
       county:     userProfile.county   || undefined,
       zip_code:   userProfile.zipCode  || undefined,
     }
-    if (deviceGeo.status === 'ok' && deviceGeo.latitude != null && deviceGeo.longitude != null) {
-      p.latitude = deviceGeo.latitude
-      p.longitude = deviceGeo.longitude
+    const lat =
+      coordsOverride?.latitude != null
+        ? coordsOverride.latitude
+        : deviceGeo.latitude
+    const lon =
+      coordsOverride?.longitude != null
+        ? coordsOverride.longitude
+        : deviceGeo.longitude
+    const hasCoords = lat != null && lon != null && Number.isFinite(lat) && Number.isFinite(lon)
+
+    if (hasCoords) {
+      p.latitude = lat
+      p.longitude = lon
       p.location_enabled = true
     } else if (deviceGeo.status === 'denied') {
       p.location_enabled = false
@@ -722,10 +815,38 @@ export default function App() {
     setMessages((p) => [...p, { id: Date.now(), role: 'user', text, timestamp: now }])
     setLoading(true)
     try {
+      let coordsOverride = null
+      if (
+        deviceGeo.status === 'pending' &&
+        (deviceGeo.latitude == null || deviceGeo.longitude == null)
+      ) {
+        const cached = readStoredGps()
+        if (cached) {
+          coordsOverride = cached
+        } else {
+          const fresh = await getCurrentPositionOnce(10000)
+          if (fresh) {
+            writeStoredGps(fresh.latitude, fresh.longitude)
+            setDeviceGeo({
+              latitude: fresh.latitude,
+              longitude: fresh.longitude,
+              status: 'ok',
+            })
+            coordsOverride = fresh
+          }
+        }
+      }
+
+      const payload = buildPayload(text, coordsOverride)
+      console.log('[Braelo] Sending location:', {
+        latitude: payload.latitude,
+        longitude: payload.longitude,
+        location_enabled: payload.location_enabled,
+      })
       const res  = await fetch(`${API_BASE}/chatbot/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildPayload(text)),
+        body: JSON.stringify(payload),
       })
       const data  = await res.json().catch(() => ({}))
       const reply = data.response ?? data.error ?? 'Sorry, something went wrong.'
@@ -845,14 +966,21 @@ export default function App() {
                   <div className="bubble-wrap">
                     <div className={`bubble ${group.role==='user'?'user':'bot'}`}>
                       {group.role === 'assistant'
-                        ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown>
+                        ? (
+                            <ReactMarkdown
+                              remarkPlugins={[remarkGfm]}
+                              components={CHAT_MARKDOWN_COMPONENTS}
+                            >
+                              {m.text}
+                            </ReactMarkdown>
+                          )
                         : m.text}
                     </div>
-                  </div>
-                  <div className="copy-action">
-                    <button className="copy-btn" onClick={() => copyMessage(m.id??mi, m.text)} title="Copy" aria-label="Copy">
-                      {copiedId===(m.id??mi) ? <IconCheck /> : <IconCopy />}
-                    </button>
+                    <div className="copy-action">
+                      <button type="button" className="copy-btn" onClick={() => copyMessage(m.id??mi, m.text)} title="Copy" aria-label="Copy">
+                        {copiedId===(m.id??mi) ? <IconCheck /> : <IconCopy />}
+                      </button>
+                    </div>
                   </div>
                 </div>
               ))}
