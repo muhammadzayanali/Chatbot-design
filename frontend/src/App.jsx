@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { AssistantMessageContent } from './businessListing.jsx'
 
 // ─── Asset imports (processed by Vite's build pipeline) ──────────────────────
 import lightLogo from '../Public/logo_black.svg'
@@ -967,20 +968,15 @@ export default function App() {
                     <div className={`bubble ${group.role==='user'?'user':'bot'}`}>
                       {group.role === 'assistant'
                         ? (
-                            <ReactMarkdown
-                              remarkPlugins={[remarkGfm]}
-                              components={CHAT_MARKDOWN_COMPONENTS}
-                            >
-                              {m.text}
-                            </ReactMarkdown>
+                            <AssistantMessageContent text={m.text} markdownComponents={CHAT_MARKDOWN_COMPONENTS} />
                           )
                         : m.text}
                     </div>
-                    <div className="copy-action">
-                      <button type="button" className="copy-btn" onClick={() => copyMessage(m.id??mi, m.text)} title="Copy" aria-label="Copy">
-                        {copiedId===(m.id??mi) ? <IconCheck /> : <IconCopy />}
-                      </button>
-                    </div>
+                  </div>
+                  <div className="copy-action">
+                    <button type="button" className="copy-btn" onClick={() => copyMessage(m.id??mi, m.text)} title="Copy" aria-label="Copy">
+                      {copiedId===(m.id??mi) ? <IconCheck /> : <IconCopy />}
+                    </button>
                   </div>
                 </div>
               ))}
