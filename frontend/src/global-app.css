@@ -813,6 +813,21 @@
     background:var(--bg-chip); border-color:var(--border-chip);
   }
   .biz-listing-maps .biz-listing-stat-value { color:var(--text-link); }
+  .biz-listing-maps-empty { cursor:default; }
+  .biz-listing-maps-empty:hover { background:transparent; border-color:transparent; }
+  .biz-listing-maps-empty .biz-listing-stat-value { color:var(--text-sub); }
+
+  .biz-listing-lista-extras {
+    display:flex; flex-wrap:wrap; align-items:center; gap:2px 6px;
+    padding:8px 12px 12px; margin-top:-4px;
+    font-size:12px; font-weight:500;
+    border-top:1px solid var(--border-chip);
+  }
+  .biz-listing-lista-extras a {
+    color:var(--text-link); text-decoration:none;
+  }
+  .biz-listing-lista-extras a:hover { text-decoration:underline; }
+  .biz-listing-lista-extra-sep { color:var(--color-ts); user-select:none; padding:0 2px; }
 
   .msg-ts { font-size:10.5px; color:var(--color-ts); margin-top:3px; letter-spacing:.1px; }
   .msg-group.is-bot  .msg-ts { margin-left:36px; }

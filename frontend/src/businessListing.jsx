@@ -10,9 +10,330 @@ function extractMapsUrlFromLine(line) {
   let url = m[1].trim()
   const md = url.match(/^\[([^\]]*)\]\(([^)]+)\)\s*$/)
   if (md) url = md[2].trim()
-  // Plain URL may be followed by other text in same line — take first URL token
+  // Plain URL may be followed by other text on same line — take first URL token
   const urlOnly = url.match(/^(https?:\/\/\S+)/i)
   return urlOnly ? urlOnly[1] : url.split(/\s/)[0] || url
+}
+
+/** GFM bullets: -, *, • (backend uses indented "-"; LLM may use "*"). */
+const LISTA_BULLET = '[-*•]'
+
+/** CSV / Lista-style blocks: numbered row + Category/Location (no 📍 / Google Maps). */
+function looksLikeListaBlock(text) {
+  if (text.includes(PIN) && text.includes('🗺️')) return false
+  const hasNumbered = /^\s*\d+\.\s.+/m.test(text)
+  const hasField = new RegExp(`^\\s*${LISTA_BULLET}\\s*Category:`, 'im').test(text) ||
+    new RegExp(`^\\s*${LISTA_BULLET}\\s*Location:`, 'im').test(text)
+  return hasNumbered && hasField
+}
+
+function firstUrlFromText(s) {
+  if (!s) return ''
+  const md = s.match(/\[([^\]]*)\]\((https?:[^)]+)\)/i)
+  if (md) return md[2].trim()
+  const m = s.match(/https?:\/\/[^\s)\]<]+/i)
+  return m ? m[0].replace(/[,;.]+$/, '') : ''
+}
+
+function stripMailto(s) {
+  return s.replace(/^mailto:/i, '').trim()
+}
+
+function stripMarkdownBold(s) {
+  return s.replace(/^\*+\s*/, '').replace(/\s*\*+$/, '').trim()
+}
+
+function isListaListingComplete(blob) {
+  if (!/^\s*\d+\.\s/m.test(blob)) return false
+  const cat = new RegExp(`^\\s*${LISTA_BULLET}\\s*Category:`, 'im').test(blob)
+  const loc = new RegExp(`^\\s*${LISTA_BULLET}\\s*Location:`, 'im').test(blob)
+  return cat && loc
+}
+
+/**
+ * Lista / internal CSV style, e.g.
+ * 1. Bbq.Brazilian
+ * - Category: …
+ * - Location: Los Angeles, California
+ * - Phone: [ListaBusiness1]
+ * Social: https://instagram.com/…
+ * Phone: 3105900305
+ * Email: …
+ * - WhatsApp: https://wa.me/…
+ */
+function listaPlaceholderPhone(v) {
+  if (!v) return true
+  const t = v.trim()
+  if (t === '—' || t === '-' || /^\[ListaBusiness/i.test(t)) return true
+  return false
+}
+
+function normalizeListaPhoneDisplay(phoneRaw) {
+  if (!phoneRaw || listaPlaceholderPhone(phoneRaw)) return '—'
+  return phoneRaw.trim()
+}
+
+const reListaPhoneBul = new RegExp(`^${LISTA_BULLET}\\s*Phone:\\s*(.+)$`, 'i')
+const reListaWaBul = new RegExp(`^${LISTA_BULLET}\\s*WhatsApp:\\s*(.+)$`, 'i')
+
+/** Parse Social / Phone / Email / Website / WhatsApp lines (Lista CSV tail or contact_info). */
+function parseListaContactFieldsFromLines(lines) {
+  let phone = ''
+  let socialUrl = ''
+  let email = ''
+  let whatsappUrl = ''
+  let websiteUrl = ''
+
+  for (const L of lines) {
+    const line = L.replace(/\*\*/g, '')
+    let m
+    if ((m = line.match(reListaPhoneBul))) {
+      const v = m[1].trim()
+      if (!listaPlaceholderPhone(v) && /[\d]/.test(v.replace(/\D/g, '')) && v.replace(/\D/g, '').length >= 7) {
+        phone = v
+      }
+    } else if ((m = line.match(/^Phone:\s*(.+)$/i))) {
+      const v = m[1].trim()
+      if (!listaPlaceholderPhone(v) && /[\d]/.test(v.replace(/\D/g, '')) && v.replace(/\D/g, '').length >= 7) {
+        phone = v
+      }
+    } else if ((m = line.match(/^Social:\s*(.+)$/i))) {
+      const u = firstUrlFromText(m[1])
+      if (u) socialUrl = u
+    } else if ((m = line.match(/^Email:\s*(.+)$/i))) {
+      const raw = m[1].trim()
+      email = stripMailto(firstUrlFromText(raw) || raw).replace(/^<|>$/g, '')
+    } else if ((m = line.match(/^Website:\s*(.+)$/i))) {
+      const raw = m[1].trim()
+      const u = firstUrlFromText(raw) || raw.replace(/^<|>$/g, '')
+      if (u && /^https?:\/\//i.test(u)) websiteUrl = u
+      else if (u && /\./.test(u)) websiteUrl = `https://${u.replace(/^\/+/, '')}`
+    } else if ((m = line.match(reListaWaBul))) {
+      const u = firstUrlFromText(m[1])
+      if (u) whatsappUrl = u
+    } else if ((m = line.match(/^WhatsApp:\s*(.+)$/i))) {
+      const u = firstUrlFromText(m[1])
+      if (u) whatsappUrl = u
+    }
+  }
+
+  return { phone, socialUrl, email, whatsappUrl, websiteUrl }
+}
+
+function seedContactFieldsFromPrimaryUrl(mapsUrl) {
+  const o = { whatsappUrl: '', socialUrl: '', email: '', websiteUrl: '' }
+  if (!mapsUrl) return o
+  if (/wa\.me\//i.test(mapsUrl) || /api\.whatsapp/i.test(mapsUrl)) o.whatsappUrl = mapsUrl
+  else if (/^mailto:/i.test(mapsUrl)) o.email = stripMailto(mapsUrl)
+  else if (!/^tel:/i.test(mapsUrl) && /^https?:\/\//i.test(mapsUrl)) {
+    if (/instagram|facebook\.com|fb\.com|tiktok|twitter\.com|x\.com/i.test(mapsUrl)) o.socialUrl = mapsUrl
+    else o.websiteUrl = mapsUrl
+  }
+  return o
+}
+
+function computeListaPrimaryLink({ whatsappUrl, socialUrl, websiteUrl, email, phone }) {
+  let primaryUrl = whatsappUrl || socialUrl || websiteUrl || (email ? `mailto:${email}` : '')
+  let linkLabel = 'Link'
+  if (whatsappUrl) linkLabel = 'WhatsApp'
+  else if (socialUrl) {
+    linkLabel = /instagram/i.test(socialUrl)
+      ? 'Instagram'
+      : /facebook/i.test(socialUrl)
+        ? 'Facebook'
+        : 'Social'
+  } else if (websiteUrl) linkLabel = 'Website'
+  else if (email) linkLabel = 'Email'
+
+  if (!primaryUrl && phone) {
+    const digits = phone.replace(/\D/g, '')
+    if (digits.length >= 7) {
+      primaryUrl = `tel:${digits}`
+      linkLabel = 'Call'
+    }
+  }
+
+  return { mapsUrl: primaryUrl || '', linkLabel }
+}
+
+function normalizeUrlKey(u) {
+  if (!u) return ''
+  return u.replace(/\/$/, '').replace(/^mailto:/i, '').toLowerCase()
+}
+
+/** Extra contact links shown under the card stats (primary CTA excluded). */
+function buildListaExtras(fields, primaryUrl) {
+  const { whatsappUrl, socialUrl, websiteUrl, email } = fields
+  const extras = []
+  const seen = new Set()
+  const pKey = normalizeUrlKey(primaryUrl)
+
+  const add = (label, href) => {
+    if (!href) return
+    const k = normalizeUrlKey(href)
+    if (!k || seen.has(k)) return
+    if (pKey && k === pKey) return
+    if (primaryUrl?.startsWith?.('mailto:') && href.startsWith('mailto:')) {
+      if (normalizeUrlKey(href) === normalizeUrlKey(primaryUrl)) return
+    }
+    seen.add(k)
+    extras.push({ label, href })
+  }
+
+  if (socialUrl) add(/instagram/i.test(socialUrl) ? 'Instagram' : /facebook/i.test(socialUrl) ? 'Facebook' : 'Social', socialUrl)
+  if (email) add('Email', `mailto:${email}`)
+  if (websiteUrl) add('Website', websiteUrl)
+  if (whatsappUrl) add('WhatsApp', whatsappUrl)
+
+  return extras
+}
+
+function listaContactFieldsForExtras({ whatsappUrl, socialUrl, websiteUrl, email }) {
+  return { whatsappUrl, socialUrl, websiteUrl, email }
+}
+
+export function parseListaBusinessMultiline(block) {
+  if (!looksLikeListaBlock(block)) return null
+
+  const lines = block.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+  if (lines.length < 2) return null
+
+  const nameLine = lines[0].replace(/\*\*/g, '')
+  const nameMatch = nameLine.match(/^\d+\.\s*(.+)$/)
+  const name = nameMatch ? stripMarkdownBold(nameMatch[1].trim()) : stripMarkdownBold(nameLine)
+
+  let category = ''
+  let address = ''
+
+  const reCat = new RegExp(`^${LISTA_BULLET}\\s*Category:\\s*(.+)$`, 'i')
+  const reLoc = new RegExp(`^${LISTA_BULLET}\\s*Location:\\s*(.+)$`, 'i')
+
+  for (const L of lines.slice(1)) {
+    const line = L.replace(/\*\*/g, '')
+    let m
+    if ((m = line.match(reCat))) category = m[1].trim()
+    else if ((m = line.match(reLoc))) address = m[1].trim()
+  }
+
+  const contactFromBody = parseListaContactFieldsFromLines(lines.slice(1))
+
+  if (!name) return null
+  const locUsable = address && address !== '—' && address !== '-' ? address : ''
+  const catUsable = category && category !== '—' && category !== '-' ? category : ''
+  const displayAddress = locUsable || catUsable
+  if (!displayAddress) return null
+
+  const {
+    phone: rawPhone,
+    socialUrl,
+    email,
+    whatsappUrl,
+    websiteUrl,
+  } = contactFromBody
+  const phone = normalizeListaPhoneDisplay(rawPhone)
+
+  const { mapsUrl, linkLabel } = computeListaPrimaryLink({
+    whatsappUrl,
+    socialUrl,
+    websiteUrl,
+    email,
+    phone: phone !== '—' ? phone : '',
+  })
+
+  const statusRaw = category ? category : ''
+  const mergedFields = { whatsappUrl, socialUrl, websiteUrl, email }
+  const listaExtras = buildListaExtras(listaContactFieldsForExtras(mergedFields), mapsUrl)
+
+  return {
+    name,
+    address: displayAddress,
+    ratingFull: '',
+    ratingValue: '—',
+    reviewCount: '',
+    statusRaw,
+    phone,
+    mapsUrl,
+    linkLabel,
+    isLista: true,
+    listaExtras,
+  }
+}
+
+/** True when this markdown block is only Lista contact tail (split off by a blank line). */
+function isListaContactTailBlock(text) {
+  const t = text.trim()
+  if (!t) return false
+  if (looksLikeListaBlock(t)) return false
+  const lines = t.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+  if (lines.length === 0) return false
+  return lines.every((line) => {
+    if (/^\[ListaBusiness\d*\]$/i.test(line)) return true
+    return /^(?:[-*•]\s*)?(Social|Phone|Email|Website|WhatsApp):\s*\S/i.test(line)
+  })
+}
+
+function mergeListaTailIntoCardData(data, tailText) {
+  const tailLines = tailText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+  const ext = parseListaContactFieldsFromLines(tailLines)
+  const seeded = seedContactFieldsFromPrimaryUrl(data.mapsUrl)
+
+  const whatsappUrl = ext.whatsappUrl || seeded.whatsappUrl
+  const socialUrl = ext.socialUrl || seeded.socialUrl
+  const websiteUrl = ext.websiteUrl || seeded.websiteUrl
+  const email = ext.email || seeded.email
+
+  const basePhoneOk = data.phone && data.phone !== '—'
+  const phoneMerged = basePhoneOk ? data.phone : normalizeListaPhoneDisplay(ext.phone)
+
+  const { mapsUrl, linkLabel } = computeListaPrimaryLink({
+    whatsappUrl,
+    socialUrl,
+    websiteUrl,
+    email,
+    phone: phoneMerged !== '—' ? phoneMerged : '',
+  })
+
+  const mergedFields = { whatsappUrl, socialUrl, websiteUrl, email }
+  const listaExtras = buildListaExtras(listaContactFieldsForExtras(mergedFields), mapsUrl)
+
+  return {
+    ...data,
+    phone: phoneMerged,
+    mapsUrl,
+    linkLabel,
+    listaExtras,
+  }
+}
+
+function mergeListaContactTailSegments(segments) {
+  const out = []
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i]
+    if (seg.type !== 'listing' || !seg.data?.isLista) {
+      out.push(seg)
+      continue
+    }
+
+    const tailParts = []
+    let j = i + 1
+    while (j < segments.length && segments[j].type === 'markdown' && isListaContactTailBlock(segments[j].content)) {
+      tailParts.push(segments[j].content)
+      j++
+    }
+
+    if (tailParts.length === 0) {
+      out.push(seg)
+      continue
+    }
+
+    const mergedData = tailParts.reduce(
+      (acc, chunk) => mergeListaTailIntoCardData(acc, chunk),
+      seg.data,
+    )
+    out.push({ type: 'listing', data: mergedData })
+    i = j - 1
+  }
+  return out
 }
 
 /**
@@ -165,8 +486,11 @@ export function parseBusinessListing(line) {
 }
 
 /** Intro text before numbered listings, or whole block if not a listing. */
-function extractPreambleAndListingsBody(trimmedBlock) {
-  if (!trimmedBlock.includes(PIN) || !trimmedBlock.includes('🗺️')) {
+function extractPreambleAndListingsBody(trimmedBlock, mode) {
+  const isGoogle = mode === 'google'
+  const isLista = mode === 'lista'
+
+  if (!isGoogle && !isLista) {
     return { preamble: trimmedBlock, listings: '' }
   }
 
@@ -176,7 +500,14 @@ function extractPreambleAndListingsBody(trimmedBlock) {
     const line = lines[idx]
     if (/^\s*\d+\.\s/.test(line)) {
       const fromHere = lines.slice(idx).join('\n')
-      if (fromHere.includes(PIN)) {
+      if (isGoogle && fromHere.includes(PIN)) {
+        preambleEnd = idx
+        break
+      }
+      if (
+        isLista &&
+        new RegExp(`^\\s*${LISTA_BULLET}\\s*(Category|Location):`, 'im').test(fromHere)
+      ) {
         preambleEnd = idx
         break
       }
@@ -192,7 +523,7 @@ function extractPreambleAndListingsBody(trimmedBlock) {
   return { preamble, listings }
 }
 
-/** Split listing region into one string per place (each ends with Google Maps line). */
+/** Google Places: one chunk per place (ends with Google Maps line). */
 function splitCompleteListings(listingsText) {
   const lines = listingsText.split(/\r?\n/)
   const groups = []
@@ -204,8 +535,25 @@ function splitCompleteListings(listingsText) {
   }
 
   for (const line of lines) {
-    const t = line.trim()
     if (/^\s*\d+\.\s/.test(line) && group.length > 0 && isComplete()) {
+      groups.push(group.join('\n'))
+      group = [line]
+    } else {
+      group.push(line)
+    }
+  }
+  if (group.length) groups.push(group.join('\n'))
+  return groups.filter((g) => g.trim())
+}
+
+/** Lista CSV style: split when next numbered item starts and previous chunk is complete. */
+function splitListaListings(listingsText) {
+  const lines = listingsText.split(/\r?\n/)
+  const groups = []
+  let group = []
+
+  for (const line of lines) {
+    if (/^\s*\d+\.\s/.test(line) && group.length > 0 && isListaListingComplete(group.join('\n'))) {
       groups.push(group.join('\n'))
       group = [line]
     } else {
@@ -229,26 +577,46 @@ export function segmentAssistantMessage(text) {
     const trimmed = block.trim()
     if (!trimmed) continue
 
-    const { preamble, listings } = extractPreambleAndListingsBody(trimmed)
-    if (preamble) segments.push({ type: 'markdown', content: preamble })
+    const isGoogle = trimmed.includes(PIN) && trimmed.includes('🗺️')
+    const isLista = looksLikeListaBlock(trimmed)
 
-    const body = listings
-    if (!body || !body.includes(PIN) || !body.includes('🗺️')) {
+    if (!isGoogle && !isLista) {
+      segments.push({ type: 'markdown', content: trimmed })
       continue
     }
 
-    const subs = splitCompleteListings(body)
-    if (subs.length === 0) subs.push(body)
+    const mode = isGoogle ? 'google' : 'lista'
+    const { preamble, listings } = extractPreambleAndListingsBody(trimmed, mode)
+    if (preamble) segments.push({ type: 'markdown', content: preamble })
+
+    const body = listings
+    if (!body) continue
+
+    const subs =
+      mode === 'google'
+        ? (() => {
+            const s = splitCompleteListings(body)
+            return s.length ? s : [body]
+          })()
+        : (() => {
+            const s = splitListaListings(body)
+            return s.length ? s : [body]
+          })()
 
     for (const sub of subs) {
-      const data = parseBusinessListingMultiline(sub) || parseBusinessListing(sub.replace(/\s+/g, ' ').trim())
+      const data =
+        mode === 'google'
+          ? parseBusinessListingMultiline(sub) || parseBusinessListing(sub.replace(/\s+/g, ' ').trim())
+          : parseListaBusinessMultiline(sub)
+
       if (data) segments.push({ type: 'listing', data })
       else if (sub.trim()) segments.push({ type: 'markdown', content: sub })
     }
   }
 
-  if (segments.length === 0) segments.push({ type: 'markdown', content: text })
-  return segments
+  let result = mergeListaContactTailSegments(segments)
+  if (result.length === 0) result.push({ type: 'markdown', content: text })
+  return result
 }
 
 function IconStar({ className }) {
@@ -299,12 +667,27 @@ function humanStatus(statusRaw) {
   return statusRaw.replace(/^(🔴|🟢|🕐|✅)\s*/u, '').trim() || statusRaw
 }
 
-export function BusinessListingCard({ name, address, ratingFull, ratingValue, reviewCount, statusRaw, phone, mapsUrl }) {
+export function BusinessListingCard({
+  name,
+  address,
+  ratingFull,
+  ratingValue,
+  reviewCount,
+  statusRaw,
+  phone,
+  mapsUrl,
+  linkLabel = 'Google Maps',
+  isLista = false,
+  listaExtras = [],
+}) {
   const statusIsClosed = /closed\s*now/i.test(statusRaw)
   const statusIsOpen = (/\bopen\b/i.test(statusRaw) && !statusIsClosed) || /✅/u.test(statusRaw)
   const statusClass = statusIsClosed ? 'is-closed' : statusIsOpen ? 'is-open' : 'is-neutral'
   const statusLabel = humanStatus(statusRaw)
   const ratingLabel = ratingValue && ratingValue !== '—' ? `${ratingValue}/5` : '—'
+  const ratingSub =
+    reviewCount ? `${Number(reviewCount).toLocaleString()} reviews` : isLista ? 'Lista' : 'Rating'
+  const mapsOpensNewTab = /^https?:\/\//i.test(mapsUrl || '')
 
   return (
     <article className="biz-listing-card">
@@ -329,9 +712,7 @@ export function BusinessListingCard({ name, address, ratingFull, ratingValue, re
           <IconStar className="biz-listing-stat-icon biz-listing-stat-star" />
           <div className="biz-listing-stat-text">
             <span className="biz-listing-stat-value">{ratingLabel}</span>
-            <span className="biz-listing-stat-sub">
-              {reviewCount ? `${Number(reviewCount).toLocaleString()} reviews` : 'Rating'}
-            </span>
+            <span className="biz-listing-stat-sub">{ratingSub}</span>
           </div>
         </div>
         <div className="biz-listing-stat">
@@ -345,22 +726,48 @@ export function BusinessListingCard({ name, address, ratingFull, ratingValue, re
           <IconClock className="biz-listing-stat-icon" />
           <div className="biz-listing-stat-text">
             <span className="biz-listing-stat-value">{statusLabel}</span>
-            <span className="biz-listing-stat-sub">Status</span>
+            <span className="biz-listing-stat-sub">{isLista ? 'Category' : 'Status'}</span>
           </div>
         </div>
-        <a
-          className="biz-listing-stat biz-listing-maps"
-          href={mapsUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <IconMapPin className="biz-listing-stat-icon" />
-          <div className="biz-listing-stat-text">
-            <span className="biz-listing-stat-value">Google Maps</span>
-            <span className="biz-listing-stat-sub">Open link</span>
+        {mapsUrl ? (
+          <a
+            className="biz-listing-stat biz-listing-maps"
+            href={mapsUrl}
+            target={mapsOpensNewTab ? '_blank' : undefined}
+            rel={mapsOpensNewTab ? 'noopener noreferrer' : undefined}
+          >
+            <IconMapPin className="biz-listing-stat-icon" />
+            <div className="biz-listing-stat-text">
+              <span className="biz-listing-stat-value">{linkLabel}</span>
+              <span className="biz-listing-stat-sub">Open link</span>
+            </div>
+          </a>
+        ) : (
+          <div className="biz-listing-stat biz-listing-maps biz-listing-maps-empty" aria-hidden="false">
+            <IconMapPin className="biz-listing-stat-icon" />
+            <div className="biz-listing-stat-text">
+              <span className="biz-listing-stat-value">—</span>
+              <span className="biz-listing-stat-sub">No link</span>
+            </div>
           </div>
-        </a>
+        )}
       </div>
+      {isLista && listaExtras?.length > 0 && (
+        <div className="biz-listing-lista-extras">
+          {listaExtras.map((x, xi) => (
+            <span key={`${x.href}-${xi}`} className="biz-listing-lista-extra-item">
+              {xi > 0 ? <span className="biz-listing-lista-extra-sep">·</span> : null}
+              <a
+                href={x.href}
+                target={/^https?:\/\//i.test(x.href) ? '_blank' : undefined}
+                rel={/^https?:\/\//i.test(x.href) ? 'noopener noreferrer' : undefined}
+              >
+                {x.label}
+              </a>
+            </span>
+          ))}
+        </div>
+      )}
     </article>
   )
 }
