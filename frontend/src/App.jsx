@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { AssistantMessageContent } from './businessListing.jsx'
+import { AssistantMessageContent, ApiDirectoryBusinessCard } from './businessListing.jsx'
 
 // ─── Asset imports (processed by Vite's build pipeline) ──────────────────────
 import lightLogo from '../Public/logo_black.svg'
@@ -20,8 +20,8 @@ import imgGirl4      from './assets/girl4.png'
 import imgMen1       from './assets/men1.png'
 import imgSleepyMen  from './assets/sleepy_men.png'
 
-const API_BASE = 'https://braelo-v1-bdaqhdc4c7d9fdb7.canadacentral-01.azurewebsites.net'
-// const API_BASE = "http://127.0.0.1:5000"
+// const API_BASE = 'https://braelo-v1-bdaqhdc4c7d9fdb7.canadacentral-01.azurewebsites.net'
+const API_BASE = "http://127.0.0.1:5000"
 const THEME_STORAGE_KEY = 'braelo-theme'
 /** Default theme when nothing is saved (must match index.html inline script DEFAULT_THEME). */
 const DEFAULT_THEME = 'dark'
@@ -806,6 +806,57 @@ export default function App() {
     return p
   }
 
+  const loadMoreBusinesses = async (messageId, msgRow) => {
+    const pagination = msgRow?.businessPagination
+    if (!pagination?.snapshot || msgRow?.loadingMore) return
+    setMessages((prev) =>
+      prev.map((x) => (x.id === messageId ? { ...x, loadingMore: true } : x)),
+    )
+    try {
+      const base = buildPayload('')
+      const res = await fetch(`${API_BASE}/chatbot/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...base,
+          message: '',
+          business_load_more: true,
+          business_snapshot: pagination.snapshot,
+          business_offset: pagination.next_offset,
+          business_page_size: pagination.page_size,
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'request failed')
+      const more = Array.isArray(data.businesses) ? data.businesses : []
+      const pag = data.business_pagination
+      setMessages((prev) =>
+        prev.map((x) => {
+          if (x.id !== messageId) return x
+          const merged = [...(x.businesses || []), ...more]
+          const stillMore = !!data.see_more && pag?.snapshot
+          return {
+            ...x,
+            loadingMore: false,
+            businesses: merged,
+            seeMore: stillMore,
+            businessPagination: stillMore
+              ? {
+                  next_offset: pag.next_offset,
+                  page_size: pag.page_size,
+                  snapshot: pag.snapshot,
+                }
+              : null,
+          }
+        }),
+      )
+    } catch {
+      setMessages((prev) =>
+        prev.map((x) => (x.id === messageId ? { ...x, loadingMore: false } : x)),
+      )
+    }
+  }
+
   const sendMessage = async (e) => {
     e?.preventDefault()
     const text = message.trim()
@@ -856,7 +907,19 @@ export default function App() {
         const parts = [lc.city, lc.state].filter(Boolean)
         setLocationContext({ label: parts.join(', '), fromGps: !!lc.from_device_gps })
       }
-      setMessages((p) => [...p, { id: Date.now()+1, role: 'assistant', text: reply, timestamp: fmt() }])
+      setMessages((p) => [
+        ...p,
+        {
+          id: Date.now() + 1,
+          role: 'assistant',
+          text: reply,
+          timestamp: fmt(),
+          businesses: Array.isArray(data.businesses) ? data.businesses : [],
+          seeMore: !!data.see_more,
+          businessPagination: data.business_pagination || null,
+          loadingMore: false,
+        },
+      ])
       if (data.require_contact_details) {
         setContactModalMsg(data.contact_details_message || 'Please share your contact details to continue.')
         setContactEmail(userProfile.email || '')
@@ -968,7 +1031,26 @@ export default function App() {
                     <div className={`bubble ${group.role==='user'?'user':'bot'}`}>
                       {group.role === 'assistant'
                         ? (
-                            <AssistantMessageContent text={m.text} markdownComponents={CHAT_MARKDOWN_COMPONENTS} />
+                            <>
+                              <AssistantMessageContent text={m.text} markdownComponents={CHAT_MARKDOWN_COMPONENTS} />
+                              {m.businesses?.length > 0 ? (
+                                <div className="assistant-api-businesses">
+                                  {m.businesses.map((b, bi) => (
+                                    <ApiDirectoryBusinessCard key={b.id ?? bi} business={b} />
+                                  ))}
+                                </div>
+                              ) : null}
+                              {m.seeMore && m.businessPagination?.snapshot ? (
+                                <button
+                                  type="button"
+                                  className="show-more-businesses-btn"
+                                  disabled={m.loadingMore}
+                                  onClick={() => void loadMoreBusinesses(m.id, m)}
+                                >
+                                  {m.loadingMore ? 'Loading…' : 'Show more'}
+                                </button>
+                              ) : null}
+                            </>
                           )
                         : m.text}
                     </div>

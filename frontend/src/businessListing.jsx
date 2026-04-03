@@ -68,6 +68,15 @@ function listaPlaceholderPhone(v) {
   return false
 }
 
+function stripUrlsFromPhoneDisplay(s) {
+  if (!s || typeof s !== 'string') return s
+  const t = s
+    .replace(/\s*https?:\/\/[^\s]+/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return t
+}
+
 function normalizeListaPhoneDisplay(phoneRaw) {
   if (!phoneRaw || listaPlaceholderPhone(phoneRaw)) return '—'
   return phoneRaw.trim()
@@ -102,7 +111,9 @@ function parseListaContactFieldsFromLines(lines) {
       if (u) socialUrl = u
     } else if ((m = line.match(/^Email:\s*(.+)$/i))) {
       const raw = m[1].trim()
-      email = stripMailto(firstUrlFromText(raw) || raw).replace(/^<|>$/g, '')
+      const tokenWithAt = raw.split(/\s+/).find((p) => p.includes('@') && !/^https?:\/\//i.test(p))
+      const emailCandidate = tokenWithAt || raw.replace(/\s+https?:\/\/\S+/gi, '').trim()
+      email = stripMailto(firstUrlFromText(emailCandidate) || emailCandidate).replace(/^<|>$/g, '')
     } else if ((m = line.match(/^Website:\s*(.+)$/i))) {
       const raw = m[1].trim()
       const u = firstUrlFromText(raw) || raw.replace(/^<|>$/g, '')
@@ -159,6 +170,74 @@ function computeListaPrimaryLink({ whatsappUrl, socialUrl, websiteUrl, email, ph
 function normalizeUrlKey(u) {
   if (!u) return ''
   return u.replace(/\/$/, '').replace(/^mailto:/i, '').toLowerCase()
+}
+
+function defaultLabelForLinkType(type) {
+  const m = {
+    whatsapp: 'WhatsApp',
+    instagram: 'Instagram',
+    facebook: 'Facebook',
+    email: 'Email',
+    website: 'Website',
+    maps: 'Maps',
+    link: 'Link',
+  }
+  return m[type] || m.link
+}
+
+function linkTypeFromHref(href, label) {
+  const h = (href || '').toLowerCase()
+  const l = (label || '').toLowerCase()
+  if (/^mailto:/i.test(href)) return 'email'
+  if (/wa\.me|whatsapp|api\.whatsapp/i.test(h)) return 'whatsapp'
+  if (/instagram\.com|instagr\.am/i.test(h) || l.includes('instagram')) return 'instagram'
+  if (/facebook\.com|fb\.com|fb\.me/i.test(h) || (l.includes('facebook') && !l.includes('instagram')))
+    return 'facebook'
+  if (/maps\.google|google\.com\/maps|goo\.gl\/maps|maps\.apple\.com/i.test(h)) return 'maps'
+  if (/^https?:\/\//i.test(href)) return 'website'
+  return 'link'
+}
+
+/**
+ * Ordered footer slots: phone first, then primary URL, then lista extras — each with its own icon.
+ */
+function buildContactLinkSlots({ phone, mapsUrl, linkLabel, listaExtras }) {
+  const slots = []
+  const seen = new Set()
+
+  const pushPhone = (display) => {
+    const v = String(display || '').trim()
+    if (!v || v === '—') return
+    if (slots.some((s) => s.type === 'phone')) return
+    slots.push({ type: 'phone', value: v })
+  }
+
+  if (mapsUrl && /^tel:/i.test(mapsUrl)) {
+    const digits = mapsUrl.replace(/^tel:/i, '').replace(/\D/g, '')
+    if (digits.length >= 7) pushPhone(digits)
+  }
+
+  const phoneClean = normalizeListaPhoneDisplay(stripUrlsFromPhoneDisplay(phone || ''))
+  if (phoneClean && phoneClean !== '—') pushPhone(phoneClean)
+
+  const addLink = (href, label) => {
+    if (!href || !String(href).trim()) return
+    if (/^tel:/i.test(href)) return
+    const key = normalizeUrlKey(href)
+    if (!key || seen.has(key)) return
+    seen.add(key)
+    const type = linkTypeFromHref(href, label)
+    slots.push({
+      type,
+      href,
+      label: String(label || defaultLabelForLinkType(type)).trim(),
+    })
+  }
+
+  if (mapsUrl && !/^tel:/i.test(mapsUrl)) addLink(mapsUrl, linkLabel)
+  for (const x of listaExtras || []) addLink(x.href, x.label)
+
+  return slots
 }
 
 /** Extra contact links shown under the card stats (primary CTA excluded). */
@@ -230,7 +309,7 @@ export function parseListaBusinessMultiline(block) {
     whatsappUrl,
     websiteUrl,
   } = contactFromBody
-  const phone = normalizeListaPhoneDisplay(rawPhone)
+  const phone = normalizeListaPhoneDisplay(stripUrlsFromPhoneDisplay(rawPhone))
 
   const { mapsUrl, linkLabel } = computeListaPrimaryLink({
     whatsappUrl,
@@ -240,7 +319,6 @@ export function parseListaBusinessMultiline(block) {
     phone: phone !== '—' ? phone : '',
   })
 
-  const statusRaw = category ? category : ''
   const mergedFields = { whatsappUrl, socialUrl, websiteUrl, email }
   const listaExtras = buildListaExtras(listaContactFieldsForExtras(mergedFields), mapsUrl)
 
@@ -250,12 +328,14 @@ export function parseListaBusinessMultiline(block) {
     ratingFull: '',
     ratingValue: '—',
     reviewCount: '',
-    statusRaw,
+    statusRaw: '',
     phone,
     mapsUrl,
     linkLabel,
     isLista: true,
     listaExtras,
+    showCategoryColumn: false,
+    sparseStats: true,
   }
 }
 
@@ -283,7 +363,9 @@ function mergeListaTailIntoCardData(data, tailText) {
   const email = ext.email || seeded.email
 
   const basePhoneOk = data.phone && data.phone !== '—'
-  const phoneMerged = basePhoneOk ? data.phone : normalizeListaPhoneDisplay(ext.phone)
+  const phoneMerged = basePhoneOk
+    ? normalizeListaPhoneDisplay(stripUrlsFromPhoneDisplay(data.phone))
+    : normalizeListaPhoneDisplay(stripUrlsFromPhoneDisplay(ext.phone))
 
   const { mapsUrl, linkLabel } = computeListaPrimaryLink({
     whatsappUrl,
@@ -302,6 +384,9 @@ function mergeListaTailIntoCardData(data, tailText) {
     mapsUrl,
     linkLabel,
     listaExtras,
+    showCategoryColumn: false,
+    sparseStats: true,
+    statusRaw: '',
   }
 }
 
@@ -653,6 +738,78 @@ function IconMapPin({ className }) {
   )
 }
 
+function IconWhatsApp({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5c-1.55 0-3-.4-4.24-1.15L3 21l1.65-5.1A8.4 8.4 0 0 1 3.5 11.5 8.5 8.5 0 0 1 12 3a8.5 8.5 0 0 1 9 8.5z" />
+      <path d="M9.5 9.5c.2 1.4 1.2 3.4 3.2 5.3 2 2 4.1 2.9 5.3 3.2" />
+    </svg>
+  )
+}
+
+function IconInstagram({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+      <rect x="2" y="2" width="20" height="20" rx="5" ry="5" />
+      <circle cx="12" cy="12" r="4" />
+      <circle cx="17.5" cy="6.5" r="1.5" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
+function IconEnvelope({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+      <rect x="2" y="4" width="20" height="16" rx="2" />
+      <path d="M22 7l-10 6L2 7" />
+    </svg>
+  )
+}
+
+function IconFacebook({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+      <path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z" />
+    </svg>
+  )
+}
+
+function IconGlobe({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+      <circle cx="12" cy="12" r="10" />
+      <path d="M2 12h20M12 2a15.3 15.3 0 0 1 0 20M12 2a15.3 15.3 0 0 0 0 20" />
+    </svg>
+  )
+}
+
+function IconExternalLink({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3" />
+    </svg>
+  )
+}
+
+function StatIconForContactType({ type, className }) {
+  switch (type) {
+    case 'whatsapp':
+      return <IconWhatsApp className={className} />
+    case 'instagram':
+      return <IconInstagram className={className} />
+    case 'facebook':
+      return <IconFacebook className={className} />
+    case 'email':
+      return <IconEnvelope className={className} />
+    case 'maps':
+      return <IconMapPin className={className} />
+    case 'website':
+      return <IconGlobe className={className} />
+    default:
+      return <IconExternalLink className={className} />
+  }
+}
+
 function IconStore({ className }) {
   return (
     <svg className={className} width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
@@ -679,15 +836,50 @@ export function BusinessListingCard({
   linkLabel = 'Google Maps',
   isLista = false,
   listaExtras = [],
+  /** When false, hide the clock / category (Lista) column entirely. */
+  showCategoryColumn = true,
+  /** When true, omit stat slots that have no real data (no "—" placeholders). */
+  sparseStats = false,
+  /** Optional explicit contact rows (phone + links with icons). If omitted, built when sparseStats && isLista. */
+  contactLinks = undefined,
 }) {
   const statusIsClosed = /closed\s*now/i.test(statusRaw)
   const statusIsOpen = (/\bopen\b/i.test(statusRaw) && !statusIsClosed) || /✅/u.test(statusRaw)
   const statusClass = statusIsClosed ? 'is-closed' : statusIsOpen ? 'is-open' : 'is-neutral'
-  const statusLabel = humanStatus(statusRaw)
+  const statusLabel = humanStatus(statusRaw || '')
   const ratingLabel = ratingValue && ratingValue !== '—' ? `${ratingValue}/5` : '—'
   const ratingSub =
     reviewCount ? `${Number(reviewCount).toLocaleString()} reviews` : isLista ? 'Lista' : 'Rating'
   const mapsOpensNewTab = /^https?:\/\//i.test(mapsUrl || '')
+
+  const ratingHasData =
+    (ratingValue && String(ratingValue).trim() !== '' && ratingValue !== '—') ||
+    (reviewCount != null && String(reviewCount).trim() !== '' && Number(reviewCount) > 0)
+  const phoneHasData = phone && String(phone).trim() !== '' && phone !== '—'
+  const statusHasData =
+    showCategoryColumn &&
+    statusRaw &&
+    String(statusRaw).trim() !== '' &&
+    statusLabel !== '—'
+
+  const showRatingStat = !sparseStats || ratingHasData
+  const showPhoneStat = !sparseStats || phoneHasData
+  const showStatusStat = !sparseStats ? showCategoryColumn : statusHasData
+  const showMapsStat = Boolean(mapsUrl)
+  const showMapsPlaceholder = !mapsUrl && !sparseStats
+
+  const footerClass =
+    sparseStats
+      ? 'biz-listing-footer biz-listing-footer--sparse'
+      : 'biz-listing-footer'
+
+  const contactSlots =
+    Array.isArray(contactLinks) && contactLinks.length > 0
+      ? contactLinks
+      : sparseStats && isLista
+        ? buildContactLinkSlots({ phone, mapsUrl, linkLabel, listaExtras })
+        : null
+  const useContactIconGrid = Array.isArray(contactSlots) && contactSlots.length > 0
 
   return (
     <article className="biz-listing-card">
@@ -707,52 +899,92 @@ export function BusinessListingCard({
           </div>
         </div>
       </div>
-      <div className="biz-listing-footer">
-        <div className="biz-listing-stat" title={ratingFull || undefined}>
-          <IconStar className="biz-listing-stat-icon biz-listing-stat-star" />
-          <div className="biz-listing-stat-text">
-            <span className="biz-listing-stat-value">{ratingLabel}</span>
-            <span className="biz-listing-stat-sub">{ratingSub}</span>
-          </div>
+      {useContactIconGrid ? (
+        <div className={footerClass}>
+          {contactSlots.map((slot, si) =>
+            slot.type === 'phone' ? (
+              <div key={`phone-${si}-${slot.value}`} className="biz-listing-stat">
+                <IconPhone className="biz-listing-stat-icon" />
+                <div className="biz-listing-stat-text">
+                  <span className="biz-listing-stat-value biz-listing-phone">{slot.value}</span>
+                  <span className="biz-listing-stat-sub">Phone</span>
+                </div>
+              </div>
+            ) : (
+              <a
+                key={`link-${si}-${normalizeUrlKey(slot.href)}`}
+                className="biz-listing-stat biz-listing-maps"
+                href={slot.href}
+                target={
+                  /^https?:\/\//i.test(slot.href) ? '_blank' : undefined
+                }
+                rel={
+                  /^https?:\/\//i.test(slot.href) ? 'noopener noreferrer' : undefined
+                }
+              >
+                <StatIconForContactType type={slot.type} className="biz-listing-stat-icon" />
+                <div className="biz-listing-stat-text">
+                  <span className="biz-listing-stat-value">{slot.label}</span>
+                  <span className="biz-listing-stat-sub">Open link</span>
+                </div>
+              </a>
+            ),
+          )}
         </div>
-        <div className="biz-listing-stat">
-          <IconPhone className="biz-listing-stat-icon" />
-          <div className="biz-listing-stat-text">
-            <span className="biz-listing-stat-value biz-listing-phone">{phone || '—'}</span>
-            <span className="biz-listing-stat-sub">Phone</span>
-          </div>
-        </div>
-        <div className={`biz-listing-stat biz-listing-stat-status ${statusClass}`}>
-          <IconClock className="biz-listing-stat-icon" />
-          <div className="biz-listing-stat-text">
-            <span className="biz-listing-stat-value">{statusLabel}</span>
-            <span className="biz-listing-stat-sub">{isLista ? 'Category' : 'Status'}</span>
-          </div>
-        </div>
-        {mapsUrl ? (
-          <a
-            className="biz-listing-stat biz-listing-maps"
-            href={mapsUrl}
-            target={mapsOpensNewTab ? '_blank' : undefined}
-            rel={mapsOpensNewTab ? 'noopener noreferrer' : undefined}
-          >
-            <IconMapPin className="biz-listing-stat-icon" />
-            <div className="biz-listing-stat-text">
-              <span className="biz-listing-stat-value">{linkLabel}</span>
-              <span className="biz-listing-stat-sub">Open link</span>
+      ) : (
+        <div className={footerClass}>
+          {showRatingStat ? (
+            <div className="biz-listing-stat" title={ratingFull || undefined}>
+              <IconStar className="biz-listing-stat-icon biz-listing-stat-star" />
+              <div className="biz-listing-stat-text">
+                <span className="biz-listing-stat-value">{ratingLabel}</span>
+                <span className="biz-listing-stat-sub">{ratingSub}</span>
+              </div>
             </div>
-          </a>
-        ) : (
-          <div className="biz-listing-stat biz-listing-maps biz-listing-maps-empty" aria-hidden="false">
-            <IconMapPin className="biz-listing-stat-icon" />
-            <div className="biz-listing-stat-text">
-              <span className="biz-listing-stat-value">—</span>
-              <span className="biz-listing-stat-sub">No link</span>
+          ) : null}
+          {showPhoneStat ? (
+            <div className="biz-listing-stat">
+              <IconPhone className="biz-listing-stat-icon" />
+              <div className="biz-listing-stat-text">
+                <span className="biz-listing-stat-value biz-listing-phone">{phone || '—'}</span>
+                <span className="biz-listing-stat-sub">Phone</span>
+              </div>
             </div>
-          </div>
-        )}
-      </div>
-      {isLista && listaExtras?.length > 0 && (
+          ) : null}
+          {showStatusStat ? (
+            <div className={`biz-listing-stat biz-listing-stat-status ${statusClass}`}>
+              <IconClock className="biz-listing-stat-icon" />
+              <div className="biz-listing-stat-text">
+                <span className="biz-listing-stat-value">{statusLabel}</span>
+                <span className="biz-listing-stat-sub">{isLista ? 'Category' : 'Status'}</span>
+              </div>
+            </div>
+          ) : null}
+          {showMapsStat ? (
+            <a
+              className="biz-listing-stat biz-listing-maps"
+              href={mapsUrl}
+              target={mapsOpensNewTab ? '_blank' : undefined}
+              rel={mapsOpensNewTab ? 'noopener noreferrer' : undefined}
+            >
+              <IconMapPin className="biz-listing-stat-icon" />
+              <div className="biz-listing-stat-text">
+                <span className="biz-listing-stat-value">{linkLabel}</span>
+                <span className="biz-listing-stat-sub">Open link</span>
+              </div>
+            </a>
+          ) : showMapsPlaceholder ? (
+            <div className="biz-listing-stat biz-listing-maps biz-listing-maps-empty" aria-hidden="false">
+              <IconMapPin className="biz-listing-stat-icon" />
+              <div className="biz-listing-stat-text">
+                <span className="biz-listing-stat-value">—</span>
+                <span className="biz-listing-stat-sub">No link</span>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      )}
+      {isLista && listaExtras?.length > 0 && !useContactIconGrid ? (
         <div className="biz-listing-lista-extras">
           {listaExtras.map((x, xi) => (
             <span key={`${x.href}-${xi}`} className="biz-listing-lista-extra-item">
@@ -767,8 +999,51 @@ export function BusinessListingCard({
             </span>
           ))}
         </div>
-      )}
+      ) : null}
     </article>
+  )
+}
+
+/** Renders one directory row from the chat API `businesses` JSON (Mongo/SQL listing shape). */
+export function ApiDirectoryBusinessCard({ business }) {
+  if (!business || typeof business !== 'object') return null
+  const loc = [business.city, business.state, business.zip_code].filter(Boolean).join(', ') || '—'
+  const dist = business.distance_miles
+  const address =
+    dist != null && Number.isFinite(Number(dist))
+      ? `${loc} · ~${Number(dist)} mi`
+      : loc
+
+  const contactRaw = (business.contact_info || '').trim()
+  const lines = contactRaw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+  const parsed = parseListaContactFieldsFromLines(lines)
+  const whatsappUrl = (parsed.whatsappUrl || business.whatsapp_url || '').trim()
+  const fields = {
+    phone: parsed.phone,
+    socialUrl: parsed.socialUrl,
+    email: parsed.email,
+    websiteUrl: parsed.websiteUrl,
+    whatsappUrl,
+  }
+  const phoneLine = normalizeListaPhoneDisplay(stripUrlsFromPhoneDisplay(fields.phone))
+  const { mapsUrl, linkLabel } = computeListaPrimaryLink(fields)
+  const listaExtras = buildListaExtras(listaContactFieldsForExtras(fields), mapsUrl)
+
+  return (
+    <BusinessListingCard
+      name={business.name || '—'}
+      address={address}
+      ratingValue="—"
+      reviewCount={null}
+      statusRaw=""
+      phone={phoneLine}
+      mapsUrl={mapsUrl}
+      linkLabel={linkLabel}
+      isLista
+      listaExtras={listaExtras}
+      showCategoryColumn={false}
+      sparseStats
+    />
   )
 }
 
