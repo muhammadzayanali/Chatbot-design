@@ -20,8 +20,8 @@ import imgGirl4      from './assets/girl4.png'
 import imgMen1       from './assets/men1.png'
 import imgSleepyMen  from './assets/sleepy_men.png'
 
-// const API_BASE = 'https://braelo-v1-bdaqhdc4c7d9fdb7.canadacentral-01.azurewebsites.net'
-const API_BASE = "http://127.0.0.1:5000"
+ const API_BASE = 'https://braelo-v1-bdaqhdc4c7d9fdb7.canadacentral-01.azurewebsites.net'
+// const API_BASE = "http://127.0.0.1:5000"
 const THEME_STORAGE_KEY = 'braelo-theme'
 /** Default theme when nothing is saved (must match index.html inline script DEFAULT_THEME). */
 const DEFAULT_THEME = 'dark'
