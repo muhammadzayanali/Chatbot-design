@@ -682,7 +682,7 @@
   /* Copy sits outside the bubble (sibling in .msg-row); user messages use row-reverse so it appears to the left of the bubble. */
   .copy-action {
     flex-shrink: 0;
-    align-self: center;
+    align-self: flex-start;
     opacity: 0;
     pointer-events: none;
     transition: opacity .15s;
