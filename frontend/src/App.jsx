@@ -21,7 +21,7 @@ import imgMen1       from './assets/men1.png'
 import imgSleepyMen  from './assets/sleepy_men.png'
 
  const API_BASE = 'https://braelo-v1-bdaqhdc4c7d9fdb7.canadacentral-01.azurewebsites.net'
-// const API_BASE = "http://127.0.0.1:5000"
+// const API_BASE = "http://127.0.0.1:8000"
 const THEME_STORAGE_KEY = 'braelo-theme'
 /** Default theme when nothing is saved (must match index.html inline script DEFAULT_THEME). */
 const DEFAULT_THEME = 'dark'
@@ -70,26 +70,149 @@ function clearStoredGps() {
   } catch (_) {}
 }
 
-/** One-shot browser position for this request (handles race: user sends before mount geo finishes). */
-function getCurrentPositionOnce(timeoutMs = 10000) {
+/** @see https://w3c.github.io/geolocation-api/#position_error_interface */
+const GEO_ERR_PERMISSION_DENIED = 1
+const GEO_ERR_POSITION_UNAVAILABLE = 2
+const GEO_ERR_TIMEOUT = 3
+
+/** macOS / iOS WebKit often need watchPosition or a user gesture before a fix arrives. */
+function useAppleStyleGeoFallback() {
+  if (typeof navigator === 'undefined') return false
+  const ua = navigator.userAgent || ''
+  if (/iPhone|iPad|iPod/i.test(ua)) return true
+  if (/Mac OS X|Macintosh|MacIntel/i.test(ua)) return true
+  return false
+}
+
+function geolocationOneAttempt(options) {
   return new Promise((resolve) => {
-    if (typeof navigator === 'undefined' || !navigator.geolocation) {
-      resolve(null)
-      return
-    }
-    const timer = setTimeout(() => resolve(null), timeoutMs)
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        clearTimeout(timer)
-        resolve({ latitude: pos.coords.latitude, longitude: pos.coords.longitude })
+        resolve({
+          ok: true,
+          latitude: pos.coords.latitude,
+          longitude: pos.coords.longitude,
+          code: null,
+        })
       },
-      () => {
-        clearTimeout(timer)
-        resolve(null)
+      (err) => {
+        resolve({
+          ok: false,
+          latitude: null,
+          longitude: null,
+          code: err && typeof err.code === 'number' ? err.code : GEO_ERR_POSITION_UNAVAILABLE,
+        })
       },
-      { enableHighAccuracy: false, maximumAge: 60000, timeout: timeoutMs },
+      options,
     )
   })
+}
+
+/**
+ * WebKit/macOS: getCurrentPosition may never fire while watchPosition receives updates.
+ */
+function geolocationWatchFirstFix(maxWaitMs) {
+  return new Promise((resolve) => {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      resolve({ ok: false, latitude: null, longitude: null, code: GEO_ERR_POSITION_UNAVAILABLE })
+      return
+    }
+    let done = false
+    let watchId = 0
+    const finish = (result) => {
+      if (done) return
+      done = true
+      try {
+        if (watchId) navigator.geolocation.clearWatch(watchId)
+      } catch (_) {}
+      try {
+        clearTimeout(timer)
+      } catch (_) {}
+      resolve(result)
+    }
+    watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        finish({
+          ok: true,
+          latitude: pos.coords.latitude,
+          longitude: pos.coords.longitude,
+          code: null,
+        })
+      },
+      () => {
+        /* Transient errors are common on macOS; wait for success or hard timeout. */
+      },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: maxWaitMs },
+    )
+    const timer = setTimeout(() => {
+      finish({
+        ok: false,
+        latitude: null,
+        longitude: null,
+        code: GEO_ERR_TIMEOUT,
+      })
+    }, maxWaitMs)
+  })
+}
+
+/** Coalesce overlapping calls (mount + first send share one acquisition). */
+let geoAcquireSingleton = null
+
+async function runGeolocationAcquisition(watchBudgetMs) {
+  if (typeof navigator === 'undefined' || !navigator.geolocation) {
+    return { coords: null, denied: false, lastCode: undefined }
+  }
+  const attempts = [
+    { enableHighAccuracy: false, maximumAge: 300000, timeout: 15000 },
+    { enableHighAccuracy: false, maximumAge: 60000, timeout: 20000 },
+    { enableHighAccuracy: false, maximumAge: 0, timeout: 22000 },
+    { enableHighAccuracy: true, maximumAge: 0, timeout: 27000 },
+  ]
+  let lastCode = GEO_ERR_POSITION_UNAVAILABLE
+  for (let i = 0; i < attempts.length; i++) {
+    const r = await geolocationOneAttempt(attempts[i])
+    if (r.ok) {
+      return { coords: { latitude: r.latitude, longitude: r.longitude }, denied: false }
+    }
+    lastCode = r.code
+    if (r.code === GEO_ERR_PERMISSION_DENIED) {
+      return { coords: null, denied: true, lastCode: r.code }
+    }
+    if (i < attempts.length - 1) {
+      await new Promise((res) => setTimeout(res, 450))
+    }
+  }
+  if (watchBudgetMs > 0) {
+    const w = await geolocationWatchFirstFix(watchBudgetMs)
+    if (w.ok) {
+      return { coords: { latitude: w.latitude, longitude: w.longitude }, denied: false }
+    }
+    lastCode = w.code
+  }
+  return { coords: null, denied: false, lastCode }
+}
+
+/**
+ * Multiple tries + optional watch fallback on Apple platforms.
+ * @param {{ watchBudgetMs?: number }} [options] — pass 0 to skip watch (e.g. faster path); default ~42s on Mac/iOS, 0 elsewhere.
+ * @returns {Promise<{ coords: { latitude: number, longitude: number } | null, denied: boolean, lastCode?: number }>}
+ */
+async function acquireGeolocation(options = {}) {
+  const defaultWatch = useAppleStyleGeoFallback() ? 42000 : 0
+  const watchBudgetMs =
+    options.watchBudgetMs !== undefined ? options.watchBudgetMs : defaultWatch
+
+  if (!geoAcquireSingleton) {
+    const p = (async () => {
+      try {
+        return await runGeolocationAcquisition(watchBudgetMs)
+      } finally {
+        if (geoAcquireSingleton === p) geoAcquireSingleton = null
+      }
+    })()
+    geoAcquireSingleton = p
+  }
+  return geoAcquireSingleton
 }
 
 // ─── Global styles live in global-app.css (imported in main.jsx — no inject delay / FOUC) ───
@@ -703,10 +826,48 @@ export default function App() {
     return {
       latitude: null,
       longitude: null,
-      status: 'pending', // pending | ok | denied | unsupported
+      status: 'pending', // pending | ok | denied | unavailable | timeout | unsupported
     }
   })
   const [locationContext, setLocationContext] = useState(null)
+
+  const deviceGeoRef = useRef(deviceGeo)
+  deviceGeoRef.current = deviceGeo
+
+  /** Safari/WebKit often require a user gesture before geolocation resolves; prime on chat interaction. */
+  const primeGeoFromUserGesture = useCallback(() => {
+    const g = deviceGeoRef.current
+    if (g.latitude != null && g.longitude != null) return
+    if (g.status === 'denied' || g.status === 'unsupported') return
+    void (async () => {
+      const { coords, denied, lastCode } = await acquireGeolocation()
+      if (coords) {
+        writeStoredGps(coords.latitude, coords.longitude)
+        setDeviceGeo({
+          latitude: coords.latitude,
+          longitude: coords.longitude,
+          status: 'ok',
+        })
+        return
+      }
+      if (denied) {
+        clearStoredGps()
+        setDeviceGeo({ latitude: null, longitude: null, status: 'denied' })
+        return
+      }
+      const snap = readStoredGps()
+      if (snap) {
+        setDeviceGeo({
+          latitude: snap.latitude,
+          longitude: snap.longitude,
+          status: 'ok',
+        })
+        return
+      }
+      const st = lastCode === GEO_ERR_TIMEOUT ? 'timeout' : 'unavailable'
+      setDeviceGeo({ latitude: null, longitude: null, status: st })
+    })()
+  }, [])
 
   const messagesEndRef   = useRef(null)
   const messagesAreaRef  = useRef(null)
@@ -728,23 +889,41 @@ export default function App() {
       setDeviceGeo({ latitude: null, longitude: null, status: 'unsupported' })
       return
     }
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const lat = pos.coords.latitude
-        const lng = pos.coords.longitude
-        writeStoredGps(lat, lng)
+    let cancelled = false
+    const sessionSnapshot = readStoredGps()
+
+    ;(async () => {
+      const { coords, denied, lastCode } = await acquireGeolocation()
+      if (cancelled) return
+      if (coords) {
+        writeStoredGps(coords.latitude, coords.longitude)
         setDeviceGeo({
-          latitude: lat,
-          longitude: lng,
+          latitude: coords.latitude,
+          longitude: coords.longitude,
           status: 'ok',
         })
-      },
-      () => {
+        return
+      }
+      if (denied) {
         clearStoredGps()
         setDeviceGeo({ latitude: null, longitude: null, status: 'denied' })
-      },
-      { enableHighAccuracy: false, maximumAge: 300000, timeout: 8000 },
-    )
+        return
+      }
+      if (sessionSnapshot) {
+        setDeviceGeo({
+          latitude: sessionSnapshot.latitude,
+          longitude: sessionSnapshot.longitude,
+          status: 'ok',
+        })
+        return
+      }
+      const st = lastCode === GEO_ERR_TIMEOUT ? 'timeout' : 'unavailable'
+      setDeviceGeo({ latitude: null, longitude: null, status: st })
+    })()
+
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   useEffect(() => {
@@ -773,7 +952,7 @@ export default function App() {
   }
 
   /**
-   * @param {{ latitude?: number, longitude?: number } | null} coordsOverride — from await getCurrentPositionOnce when state was still pending
+   * @param {{ latitude?: number, longitude?: number } | null} coordsOverride — from acquireGeolocation when state was still pending
    */
   const buildPayload = (text, coordsOverride = null) => {
     const p = {
@@ -800,7 +979,7 @@ export default function App() {
       p.latitude = lat
       p.longitude = lon
       p.location_enabled = true
-    } else if (deviceGeo.status === 'denied') {
+    } else {
       p.location_enabled = false
     }
     return p
@@ -868,23 +1047,55 @@ export default function App() {
     setLoading(true)
     try {
       let coordsOverride = null
-      if (
-        deviceGeo.status === 'pending' &&
-        (deviceGeo.latitude == null || deviceGeo.longitude == null)
-      ) {
+      let geoStatusForLog = deviceGeo.status
+      const missingCoords =
+        deviceGeo.latitude == null || deviceGeo.longitude == null
+      const shouldTryGeo =
+        missingCoords &&
+        (deviceGeo.status === 'pending' ||
+          deviceGeo.status === 'unavailable' ||
+          deviceGeo.status === 'timeout')
+
+      if (shouldTryGeo) {
         const cached = readStoredGps()
         if (cached) {
           coordsOverride = cached
+          geoStatusForLog = 'ok'
+          setDeviceGeo({
+            latitude: cached.latitude,
+            longitude: cached.longitude,
+            status: 'ok',
+          })
         } else {
-          const fresh = await getCurrentPositionOnce(10000)
-          if (fresh) {
-            writeStoredGps(fresh.latitude, fresh.longitude)
+          const { coords, denied, lastCode } = await acquireGeolocation()
+          if (coords) {
+            writeStoredGps(coords.latitude, coords.longitude)
+            geoStatusForLog = 'ok'
             setDeviceGeo({
-              latitude: fresh.latitude,
-              longitude: fresh.longitude,
+              latitude: coords.latitude,
+              longitude: coords.longitude,
               status: 'ok',
             })
-            coordsOverride = fresh
+            coordsOverride = coords
+          } else if (denied) {
+            clearStoredGps()
+            geoStatusForLog = 'denied'
+            setDeviceGeo({ latitude: null, longitude: null, status: 'denied' })
+          } else {
+            const snap = readStoredGps()
+            if (snap) {
+              geoStatusForLog = 'ok'
+              setDeviceGeo({
+                latitude: snap.latitude,
+                longitude: snap.longitude,
+                status: 'ok',
+              })
+              coordsOverride = snap
+            } else {
+              const st = lastCode === GEO_ERR_TIMEOUT ? 'timeout' : 'unavailable'
+              geoStatusForLog = st
+              setDeviceGeo({ latitude: null, longitude: null, status: st })
+            }
           }
         }
       }
@@ -894,6 +1105,7 @@ export default function App() {
         latitude: payload.latitude,
         longitude: payload.longitude,
         location_enabled: payload.location_enabled,
+        geo_status: geoStatusForLog,
       })
       const res  = await fetch(`${API_BASE}/chatbot/api/chat`, {
         method: 'POST',
@@ -968,7 +1180,10 @@ export default function App() {
     catch (_) {}
   }
 
-  const handleKey = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() } }
+  const handleKey = (e) => {
+    primeGeoFromUserGesture()
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() }
+  }
   const canSend   = message.trim().length > 0 && !loading
 
   // Group consecutive messages by role
@@ -1092,9 +1307,12 @@ export default function App() {
         <div className={`input-row${inputFocused?' is-focused':''}`}>
           <textarea ref={textareaRef} className="msg-textarea" value={message}
             onChange={(e) => { setMessage(e.target.value); adjustTextarea() }}
-            onKeyDown={handleKey} onFocus={() => setInputFocused(true)} onBlur={() => setInputFocused(false)}
+            onKeyDown={handleKey}
+            onPointerDown={primeGeoFromUserGesture}
+            onFocus={() => { primeGeoFromUserGesture(); setInputFocused(true) }}
+            onBlur={() => setInputFocused(false)}
             placeholder="Message Braelo…" disabled={loading} rows={1} aria-label="Type a message" />
-          <button className="send-btn" onClick={sendMessage} disabled={!canSend} aria-label="Send">
+          <button type="button" className="send-btn" onPointerDown={primeGeoFromUserGesture} onClick={sendMessage} disabled={!canSend} aria-label="Send">
             <IconSend />
           </button>
         </div>
